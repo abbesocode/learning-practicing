@@ -1,0 +1,316 @@
+---
+title: "SPY Price/Options Price Simulation"
+author: "me"
+date: "5/16/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+#############################################################################
+
+Project Library
+```{r}
+library(quantmod)
+library(lubridate)
+library(pbapply)
+library(Hmisc)
+```
+
+
+Reading in data for selected stock
+```{r}
+ticker = "SPY"
+stock = getSymbols(ticker,auto.assign = FALSE)
+
+#adding latest data
+tdy = getQuote(ticker)
+print(tdy)
+
+stock = rbind(stock, xts(cbind(tdy$Open,tdy$High,tdy$Low,tdy$Last,tmp$Volume,tdy$Last), order.by = Sys.Date()))
+```
+
+Calculating returns
+```{r}
+#generating returns
+tdy = Ad(stock)
+returns = ROC(tdy,type="discrete")
+returns[is.na(returns)]<-0
+
+#generating return stats
+describe(returns)
+```
+
+
+
+Generating predicted stock price within quantiles for given probabilities
+
+```{r}
+
+stock_returns = function(price, N, mean, stdev)
+{
+  delta_t = 1/N # for 1 period
+  for(i in seq(N))
+  {
+    epsilon <- runif(n=1,min = 0,max=1) # random probabilities 
+    price <- price * (1 + qnorm(epsilon, mean*delta_t,stdev*sqrt(delta_t)))
+  }
+  price
+}
+
+```
+
+
+```{r}
+
+simulations = 1000
+N = 20
+price = as.numeric(coredata(tdy[Sys.Date() - days(N)]))
+mean = mean(returns)
+stdev = sd(returns)
+
+```
+
+
+```{r}
+stock_prices <- c()
+for(i in seq(simulations))
+{
+  stock_prices <- c(stock_prices,stock_returns(price = price, N=N,mean=mean,stdev=stdev))
+}
+
+quantile(stock_prices)
+```
+```{r}
+last(tdy)
+```
+
+
+```{r}
+EXPIRY <- tdy[options.expiry(tdy)]
+EXPIRY <- EXPIRY["2007::"]
+IDX <- index(EXPIRY)
+
+#IS YOUR DATE UPDATED?
+#https://www.marketwatch.com/tools/options-expiration-calendar
+NEXT.EXPIRY <- as.Date("2022-07-20")
+IDX<- c(IDX,NEXT.EXPIRY)
+
+MEAN = function(calculateUNTIL)
+{
+  tdy <- tdy[paste0("::",calculateUNTIL)]
+  tdy <- ROC(tdy,type="discrete")
+  tdy[is.na(tdy)]<-0
+  mean(tdy)
+}
+STDEV = function(calculateUNTIL)
+{
+  tdy <- tdy[paste0("::",calculateUNTIL)]
+  tdy <- ROC(tdy,type="discrete")
+  tdy[is.na(tdy)]<-0
+  sd(tdy)
+}
+
+means <- do.call(rbind,lapply(as.list(IDX), MEAN))
+stdevs <- do.call(rbind,lapply(as.list(IDX), STDEV))
+days = as.numeric(diff(IDX))
+```
+
+
+```{r}
+MONTE.CARLO = function(sim,iter,LastIter)
+{
+  simulations <- sim
+  N <- days[iter]
+  STK_PRC <- as.numeric(EXPIRY[iter])
+  MEAN <- means[iter]
+  STDEV <- stdevs[iter]
+  stock_prices <- c()
+  for(i in seq(simulations))
+  {
+    stock_prices <- c(stock_prices, stk_ret(STK_PRC = STK_PRC,N=N,MEAN=MEAN,STDEV = STDEV))
+  }
+
+  START <- as.data.frame(round(STK_PRC,2))
+  START.DATE = index(EXPIRY[iter])
+  PROBS = as.data.frame(t(round(quantile(stock_prices,probs = seq(0,1,0.05)),2)))
+
+  if(iter == LastIter)
+  {
+    END <- as.data.frame(NA)
+    END.DATE = as.data.frame(NA)
+  }else{
+    END <- as.data.frame(as.numeric(round(EXPIRY[iter+1],2)))
+    END.DATE = index(EXPIRY[iter+1])
+  }
+  all <- cbind(START,START.DATE,PROBS,END,END.DATE)
+  colnames(all) <- c("START.PRC","START.DATE","0%","5%","10%","15%","20%","25%","30%","35%","40%","45%","50%","55%",
+                     "60%","65%","70%","75%","80%","85%","90%","95%","100%","END.PRC","END.DATE")
+
+  all
+
+}
+```
+
+
+```{r}
+p <- pblapply(as.list(1:length(days)), function(x){
+  MONTE.CARLO(sim=1000,iter = x, LastIter = length(days))
+})
+p <- do.call(rbind,p)
+
+plot(p$END.PRC, type="l")
+lines(p$`0%`, col='red')
+lines(p$`100%`,col='green')
+```
+
+
+```{r}
+# number of months
+nMo <- nrow(p)
+
+# % of closes above 100%
+sum(as.numeric(na.omit(ifelse(p$END.PRC > p$`100%`,1,0))))/nMo
+
+# % of closes below 0%
+sum(as.numeric(na.omit(ifelse(p$END.PRC < p$`0%`,1,0))))/nMo
+```
+
+#OPTIONS PRICING SIMULATION
+
+##############################################################################
+Binomial Trees Pricing
+##############################################################################
+1. Option Pricing: A firm’s shares are currently trading at £25 per share. The
+firm also issues one period call options (ie the exercise date is in one period’s
+time), with an exercise price of £30. In one period’s time, the share price will
+either increase to £35, or fall to £10, each with a probability of 0.5. The risk
+free rate is 10%. Using the binomial pricing model, what is the current price of
+the call option?
+
+
+
+```{r}
+Spot= 50
+Periods= 1
+Strike= 45
+p1= 62.50
+p_1= 10
+prob= .6
+rfr= .07
+
+
+Price= function(Spot, Periods, Strike,p1,p_1, prob, rfr){
+  p1= max(0, p1- Strike)   
+  p_1= max(0, p_1-Strike)   
+  
+  Curr_Price= ((p1* prob)+ (p_1* (prob-1))) / (1+rfr)^Periods
+```
+
+
+
+##############################################################################
+1. Black-Scholes option pricing
+##############################################################################
+
+
+Suppose the stock price is 40 and we need to price a call option with a strike
+of 45 maturing in 4 months. The stock is not expected to pay dividends. The
+continuously-compounded riskfree rate is 3%/year, the mean return on the
+stock is 7%/year, and the standard deviation of the stock return is 40%/year.
+(The Black-Scholes formula is given at the end of the homework.)
+
+Formula:
+                        $C(S, T) = S_tN(d1) − K(e^-rt)N(d2)$
+
+
+
+```{r}
+# C	=	call option price
+# N	=	Cumulative distribution function of the normal distribution
+S_t	= 50
+K	=	45
+r	=	.06 #per year
+t	=	4 #4 months, replace with delta? 
+sig	=	.55
+
+BS_price= function(C,N,S_t, K, r,t,sig){
+  
+  d1= ( log(S_t/K) + (r+sig^2/2)*t )/  (sig*sqrt(t))
+  d2= d1 - sig*sqrt(t)
+  BS_price= S_t*pnorm(d1)- K*exp(-r*t)*pnorm(d2)
+  
+  return(BS_price)
+}
+
+BS_price(C,N,S_t, K, r,t,sig)
+
+```
+C	=	call option price
+N	=	Cumulative distribution function of the normal distribution
+S_t	=	spot price of an asset
+K	=	strike price
+r	=	risk-free interest rate
+t	=	time to maturity
+$\sigma$	=	volatility of the asset
+
+
+
+
+
+
+
+
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
