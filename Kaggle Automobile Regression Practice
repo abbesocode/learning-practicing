@@ -1,0 +1,313 @@
+---
+title: "Kaggle Automobile Regression Practice"
+author: "me"
+date: "6/30/2022"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+############################################################ 
+##About Data Set (from Kaggle) <https://www.kaggle.com/datasets/toramky/automobile-dataset?resource=download>
+
+Context This dataset consist of data From 1985 Ward's Automotive Yearbook. Here are the sources
+
+Sources:
+
+1)  1985 Model Import Car and Truck Specifications, 1985 Ward's Automotive Yearbook.
+2)  Personal Auto Manuals, Insurance Services Office, 160 Water Street, New York, NY 10038
+3)  Insurance Collision Report, Insurance Institute for Highway Safety, Watergate 600, Washington, DC 20037
+
+Content This data set consists of three types of entities: (a) the specification of an auto in terms of various characteristics, (b) its assigned insurance risk rating, (c) its normalized losses in use as compared to other cars. The second rating corresponds to the degree to which the auto is more risky than its price indicates. Cars are initially assigned a risk factor symbol associated with its price. Then, if it is more risky (or less), this symbol is adjusted by moving it up (or down) the scale. Actuarians call this process "symboling". A value of +3 indicates that the auto is risky, -3 that it is probably pretty safe.
+
+The third factor is the relative average loss payment per insured vehicle year. This value is normalized for all autos within a particular size classification (two-door small, station wagons, sports/speciality, etc...), and represents the average loss per car per year.
+
+Note: Several of the attributes in the database could be used as a "class" attribute.
+
+================================================================================
+#Objective/Problem Definition
+
+The data contains mainly information on the car engineering, but what is more interesting to me is:
+
+(b) its assigned insurance risk rating (symboling)
+
+Using the engineering information my objective will be to explain as much of the variation in losses and risk rating as possible with a linear regresssion model. 
+================================================================================
+
+
+
+===============================================================================
+# 1. Setup
+===============================================================================
+
+## 1.1) Download data
+Source: <https://www.kaggle.com/datasets/toramky/automobile-dataset?resource=download>
+```{r}
+library(psych)
+auto_data= read.csv("Automobile_data.csv")
+```
+
+## 1.2) Load and describe raw data
+```{r}
+describe(auto_data)
+head(auto_data)
+unique(auto_data$make)
+length(auto_data$make)
+str(auto_data)
+```
+
+car makes: 
+"alfa-romero" "audi" "bmw" "chevrolet"\
+"dodge" "honda" "isuzu" "jaguar"\
+"mazda" "mercedes-benz" "mercury" "mitsubishi"\
+"nissan" "peugot" "plymouth" "porsche"\
+"renault" "saab" "subaru" "toyota"\
+"volkswagen" "volvo"
+
+
+===============================================================================
+#2. Transforming Data
+===============================================================================
+
+##Transforming and recognizing missing valuesauto_data.c= auto_data
+```{r}
+#Turning 'columns'?' to NA
+auto_data[auto_data == '?'] <- NA
+auto_data.c= auto_data
+
+#Converting data to proper data types
+type.convert(auto_data.c)
+
+#Counting all NA values
+colSums(is.na(auto_data))
+```
+
+##Dropping "NA" values 
+```{r}
+auto_data.c= auto_data.c[complete.cases(auto_data.c),]
+auto_data.c= type.convert(auto_data.c)
+
+#dropping engine location bc it has only 1 factor in the cleaned data
+auto_data.c= subset(auto_data.c, select= -c(engine.location) )
+```
+*Attempts were made to group missing values by make, car type, etc. and average missing integer values or use retype(auto_data.c) mode values for characters/strings but this likely would lead to false conclusions since car make is a large actor in safety. [see below for alternative atttempts]*
+
+
+##Turning Characters to Factors
+```{r}
+auto_data.c <- as.data.frame(unclass(auto_data.c),stringsAsFactors=TRUE)
+str(auto_data.c)
+```
+
+===============================================================================
+#3 Visualizing
+===============================================================================
+
+##Visualizing Distribution of Symboling (rating of how risky the car is compared to what tis price indicates)
+```{r}
+hist(auto_data.c$symboling)
+hist(auto_data.c$normalized.losses)
+hist(auto_data.c$price)
+```
+
+*It appears as though symboling ratings are approximately normal while losses and price are heavily skewed* *This posits that the latter two should be normalized in regression testing should a predictive model be built*
+
+##Make vs Symboling
+```{r}
+
+#Creating a Table containing only the make and mean symbol rating
+SYMvMAKE = (aggregate(auto_data.c$symboling, by=list(auto_data.c$make) ,FUN =  mean )) 
+SYMvMAKE$x = as.numeric(SYMvMAKE$x)
+colnames(SYMvMAKE)= c("make","mean")
+
+library(ggplot2)
+ggplot(SYMvMAKE, aes(x=factor(make),y=mean)) + geom_bar(stat = "identity") + theme(axis.text.x = element_text(angle = 45))
+```
+
+*From Documentation: A value of +3 indicates that the auto is risky, -3 that it is probably pretty safe.* *It appears that for this sample, on average, Volvo is the safest car option while Porsche Saab, & VW are* *particularly dangerous*
+
+##Transforming factor levels for character variables to numeric levels
+```{r}
+auto_data.n = auto_data.c
+
+for (i in 1:ncol(auto_data.n)){
+  if (is.factor(auto_data.n[,i])){
+   auto_data.n[,i] = as.numeric(auto_data.n[,i])
+  }
+}
+```
+
+*Alternative solution: data %\<\>% mutate_if(is.factor, as.numeric)*
+
+##Showing correlation of variables
+```{r}
+library(psych)
+library(corrplot)
+
+corrplot(cor(auto_data.n), 
+         tl.cex = 0.6, type = 'lower', diag = FALSE)
+```
+
+*NOTE: a positive rating in symboling denotes a more risky vehicle*
+
+*Symboling* *Positive correlation: losses, \# doors* *Negative correlation: body style, wheel base, dimensions*
+*Losses* *Positive correlation: \# doors,* *Negative correlation: body style, wheel base, dimensions*
+
+================================================================================
+#4 Regression testing with the base data.frame
+================================================================================
+
+
+##Regression Test 1: Full Data, All Variables
+```{r}
+auto.lm1= lm(symboling~. , data=auto_data.c)
+summary(auto.lm1)
+```
+*With an* $R^2$ *value of ~.81 the model seems to explain much of the variation in symbol ratings even without log normalizing skewed variables*
+
+
+
+##Creating test and train DF
+*Although creating a test/train set is not necessary/traditional fro simple regression it helped to plot and visualize the strength of the model*
+```{r}
+dt = sort(sample(nrow(auto_data.c), nrow(auto_data.c)*.5))
+train<-auto_data.c[dt,]
+test<-auto_data.c[-dt,]
+
+#There are an odd number of rows n the cleaned data set so we have to drop 1 for an even split
+test= test[-c(1),]
+```
+
+```{r}
+auto.lm_train= lm(symboling~. , data=train)
+
+comparison <- data.frame(actual= test$symboling, predicted=predict(auto.lm_train))
+comparison
+```
+
+```{r}
+plot(x=comparison$predicted, y= comparison$actual,
+     xlab='Predicted Values',
+     ylab='Actual Values',
+     main='Predicted vs. Actual Values')
+abline(a=0, b=1)
+```
+
+
+
+
+##Regression Test 2: Full Data, No Highly Correlated Values
+```{r}
+auto.lm2= lm(symboling~.-city.mpg -highway.mpg -length -width -fuel.type -price , data=train)
+summary(auto.lm2)
+```
+*By removing variables that we saw were highly correlated in the correlation plot and leaving only the percieved "root" feature we saw a significant improvement in the R^2 value*
+
+```{r}
+comparison2 <- data.frame(actual= test$symboling, predicted=predict(auto.lm2))
+comparison2
+
+```
+
+
+```{r}
+plot(x=comparison2$predicted, y= comparison2$actual,
+     xlab='Predicted Values',
+     ylab='Actual Values',
+     main='Predicted vs. Actual Values')
+abline(a=0, b=1)
+```
+
+##Creating a test/train set with log transformed variables
+```{r}
+dt = sort(sample(nrow(auto_data.c), nrow(auto_data.c)*.5))
+train2<-auto_data.c[dt,]
+test2<-auto_data.c[-dt,]
+
+#Log normalizing skewed variables of interest
+train2$normalized.losses = log(train2$normalized.losses)
+test2$normalized.losses = log(test2$normalized.losses)
+
+train2$price = log(train2$price)
+test2$price = log(test2$price)
+
+#Adding 4 because log(0) is undefined
+train2$symboling = log(4+train2$symboling)
+test2$symboling = log(4+test2$symboling)
+
+test2= test2[-c(1),]
+```
+
+```{r}
+auto.lm1_2= lm(symboling~. , data=train2)
+summary(auto.lm2)
+```
+
+```{r}
+comparison1_2 <- data.frame(actual= test2$symboling, predicted=predict(auto.lm1_2))
+comparison1_2
+```
+
+```{r}
+plot(x=comparison1_2$predicted, y= comparison1_2$actual,
+     xlab='Predicted Values',
+     ylab='Actual Values',
+     main='Predicted vs. Actual Values')
+abline(a=0, b=1)
+```
+*We see here that after transforming skewed parameters to their more normalized forms our R^2 value decreases significantly although the line fit appears much more reasonable*
+
+
+Although it is evident a non-linear model would be more suitable these linear-regression models demonstrate that the physical components of the car do a great deal in explaining variance in the symbol safety ratings.    
+
+
+
+#Unused Ideas Catalog #SQL -\> dbplyr: <https://dbplyr.tidyverse.org/articles/sql-translation.html>
+
+```{r}
+#Transforming integer NA values into mean values
+# for (i in 1:ncol(auto_data)) {
+#   
+#     auto_data[,i][is.na(auto_data[,i])] = mean(auto_data[,i], na.rm=TRUE)
+#   
+# }
+```
+
+```{r}
+#Transforming integer NA values into mode values
+  # library(tidyverse)
+  # install.packages("upstartr")
+  # library(upstartr)
+
+# for (i in 1:ncol(auto_data)) {
+#   
+#     auto_data[,i][is.na(auto_data[,i])] = calc_mode(auto_data[,i])
+#   
+# }
+
+# library(dplyr)
+# library(tidyr)
+# auto_data$normalized.losses = replace_na(auto_data$normalized.losses,mean(auto_data$normalized.losses, na.rm = TRUE))
+# auto_data$num.of.doors = replace_na(auto_data$num.of.doors,calc_mode(auto_data$num.of.doors, na.rm = TRUE))
+```
+
+
+#Generating sample data for Stack Overflow w/ dput()
+```{r}
+# dput(auto_data[(1:7),1:7])
+# 
+# make = c("alfa-romero", "alfa-romero", "alfa-romero", 
+# "audi", "audi", "audi", "audi")
+# symboling = c(3L, 3L, 1L, 2L, 2L, 2L, 1L)
+# normalized.losses = c(NA, NA, NA, 164L, 164L, NA, 
+# 158L)
+# fuel.type = c("gas", "gas", "gas", "gas", "gas", "gas", "gas")
+# aspiration = c("std", "std", "std", "std", "std", "std", "std")
+# num.of.doors = c("two", "two", "two", "four", "four", "two", "four")
+# body.style = c("convertible", "convertible","hatchback", "sedan", "sedan", "sedan", "sedan")
+# price= c(13495, 18705, NA, 17217, 17293, NA, 18304)
+# auto_data_sample= data.frame(make,symboling,fuel.type,aspiration, num.of.doors, body.style, price)
+```
